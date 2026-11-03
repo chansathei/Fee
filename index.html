@@ -79,6 +79,7 @@ window.onerror=function(m,s,l,c){ERR.push(STAGE+'：'+m+'（'+l+':'+c+'）');var
 <!-- ===== 統計 ===== -->
 <section id="pStat" class="hide">
   <div class="head"><img data-k="f_tux" style="width:38px"><h1>統計</h1><span class="stamp">月<br>報</span></div>
+  <div class="card" id="tipCard" style="display:flex;gap:8px;align-items:flex-start"></div>
   <div class="card"><div class="lbl">近 12 個月支出（撳柱睇詳情）</div><div id="trend"></div><div id="trendInfo" class="sub" style="text-align:center"></div></div>
   <div class="card" id="cmpCard" style="display:flex;gap:8px;align-items:center"></div>
   <div class="card"><div class="lbl">本月分類及預算</div><div id="budget"></div></div>
@@ -120,6 +121,15 @@ window.onerror=function(m,s,l,c){ERR.push(STAGE+'：'+m+'（'+l+':'+c+'）');var
     <div class="two"><select id="rCat" class="inp"></select><input id="rPay" class="inp" placeholder="付款方式，例如 Visa"></div>
     <button class="chip gr" id="rAdd" style="width:100%">加入清單</button>
   </div>
+
+  <div class="card"><div class="lbl">外幣匯率（1 單位外幣 = 幾多港幣）</div>
+    <div class="sub" style="font-size:12px;margin-bottom:8px">Apple Pay 喺外地付款時，會用呢度嘅匯率換算做港幣，原本金額會寫喺備註。預設數字係約數，出發前請撳「更新匯率」或者自己改。</div>
+    <div id="fxList"></div>
+    <button class="chip gr" id="fxUpd" style="width:100%">更新匯率（需要網絡）</button><div class="sub" id="fxInfo" style="font-size:12px;margin-top:6px"></div></div>
+
+  <div class="card"><div class="lbl">分類記憶</div>
+    <div class="sub" style="font-size:12px;margin-bottom:8px">Apple Pay 自動記錄時，你幫某個商戶揀過一次類別，之後就會自動套用。可以喺度改或者刪除。</div>
+    <div id="ruleList"></div></div>
 
   <button class="btn" id="setSave">儲存設定</button>
 
@@ -196,7 +206,9 @@ function toast(msg,k){var t=$('toast');t.innerHTML=pic(k||'tabby_face2',38)+'<sp
 </script><script>STAGE='設定';
 /* ---------- 設定 ---------- */
 var DEF_CATS=['餐飲','交通','購物','貓貓','日用','娛樂','醫療','其他'];
-var SET={cats:DEF_CATS.slice(),budget:{},recurring:[],goals:[]};
+var FX_CODES=[['KRW','韓圜 ₩'],['JPY','日圓 ¥'],['CNY','人民幣 CN¥'],['TWD','新台幣 NT$'],['MOP','澳門幣'],['USD','美元 US$'],['EUR','歐元 €'],['GBP','英鎊 £'],['SGD','新加坡元 S$'],['THB','泰銖 ฿']];
+var FX_DEF={KRW:0.0056,JPY:0.051,CNY:1.08,TWD:0.24,MOP:0.97,USD:7.78,EUR:8.4,GBP:10.1,SGD:5.9,THB:0.23};
+var SET={cats:DEF_CATS.slice(),budget:{},recurring:[],goals:[],rules:{},fx:JSON.parse(JSON.stringify(FX_DEF))};
 function b64d(s){s=String(s).replace(/-/g,'+').replace(/_/g,'/').replace(/[^A-Za-z0-9+\/]/g,'');while(s.length%4)s+='=';
   var bin=atob(s),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
   try{return new TextDecoder('utf-8').decode(u)}catch(e){return decodeURIComponent(escape(bin))}}
@@ -212,7 +224,11 @@ try{var sj=JSON.parse(SET_TXT);if(sj&&typeof sj==='object'){
   if(Array.isArray(sj.cats)&&sj.cats.length)SET.cats=sj.cats.filter(function(c){return c&&c!=='收入'});
   if(sj.budget&&typeof sj.budget==='object')SET.budget=sj.budget;
   if(Array.isArray(sj.recurring))SET.recurring=sj.recurring;
-  if(Array.isArray(sj.goals))SET.goals=sj.goals;}}catch(e){}
+  if(Array.isArray(sj.goals))SET.goals=sj.goals;
+  if(typeof sj.rules==='string'){try{sj.rules=JSON.parse(sj.rules)}catch(e){sj.rules={}}}
+  if(sj.rules&&typeof sj.rules==='object')SET.rules=sj.rules;
+  if(sj.fx&&typeof sj.fx==='object')for(var fk in sj.fx)if(num(sj.fx[fk])>0)SET.fx[fk]=num(sj.fx[fk]);
+  for(var ok in sj)if(!(ok in SET))SET[ok]=sj[ok];}}catch(e){}
 var PAL=['#E6A65D','#8E949C','#6D8346','#C8483A','#B86E2E','#A8B98A','#C9A27E','#6E7480'];
 function catColor(c){var i=SET.cats.indexOf(c);if(i<0){i=0;for(var j=0;j<c.length;j++)i+=c.charCodeAt(j)}return PAL[i%PAL.length]}
 
@@ -327,7 +343,33 @@ $('aSave').onclick=function(){var a=num($('aAmt').value);if(!(a>0))return toast(
   send({op:'add',tab:'add',line:line},'記低 '+money(a));};
 </script><script>STAGE='統計';
 /* ---------- 統計 ---------- */
-function renderStats(){var n=new Date(),months=[];
+function tips(){var n=new Date(),day=n.getDate(),dim=new Date(n.getFullYear(),n.getMonth()+1,0).getDate();
+  var m0=new Date(n.getFullYear(),n.getMonth(),1).getTime(),l0=new Date(n.getFullYear(),n.getMonth()-1,1).getTime();
+  var lEnd=Math.min(new Date(n.getFullYear(),n.getMonth()-1,day+1).getTime(),m0);
+  var cur={},prev={},mer={},small=0,smallN=0,out=[],good=[];
+  exp.forEach(function(r){if(r.t>=m0){cur[r.cat]=(cur[r.cat]||0)+r.amt;if(r.mer){var k=r.mer;mer[k]=mer[k]||{n:0,s:0};mer[k].n++;mer[k].s+=r.amt}
+      if(r.amt<50){small+=r.amt;smallN++}}else if(r.t>=l0&&r.t<lEnd)prev[r.cat]=(prev[r.cat]||0)+r.amt});
+  /* 1. 超支預警：照而家速度推算月尾 */
+  for(var c in SET.budget){var b=num(SET.budget[c]),s=cur[c]||0;if(!(b>0))continue;var proj=s/day*dim;
+    if(s>b)out.push({w:3,t:'<b>'+esc(c)+'</b>已經超出預算 '+money(s-b)+'，今個月盡量唔好再用啦'});
+    else if(proj>b*1.05&&day>=3)out.push({w:2,t:'照咁落去，<b>'+esc(c)+'</b>月尾會用到 '+money(proj)+'，超出預算。由今日起每日用唔好多過 <b>'+money((b-s)/Math.max(1,dim-day+1))+'</b>'});}
+  /* 2. 同上月同期比較：升得最多同跌得最多 */
+  var up=null,down=null;for(var k in cur){var d=cur[k]-(prev[k]||0);if(prev[k]>0&&d>=100&&d/prev[k]>=0.2&&(!up||d>up.d))up={c:k,d:d,p:d/prev[k]}}
+  for(var k2 in prev){var d2=(cur[k2]||0)-prev[k2];if(d2<=-100&&(!down||d2<down.d))down={c:k2,d:d2}}
+  if(up)out.push({w:1,t:'<b>'+esc(up.c)+'</b>比上月同期多用 '+money(up.d)+'（+'+(up.p*100).toFixed(0)+'%）'});
+  if(down)good.push('<b>'+esc(down.c)+'</b>比上月同期慳咗 '+money(-down.d)+'，做得好！');
+  /* 3. 最常幫襯 */
+  var top=null;for(var m in mer)if(mer[m].n>=3&&(!top||mer[m].n>top.n))top={m:m,n:mer[m].n,s:mer[m].s};
+  if(top)out.push({w:0,t:'今個月最常幫襯 <b>'+esc(top.m)+'</b>（'+top.n+' 次，共 '+money(top.s)+'）。少去兩次大約慳到 '+money(top.s/top.n*2)});
+  /* 4. 細額消費 */
+  if(smallN>=8)out.push({w:0,t:'今個月有 '+smallN+' 筆少過 HK$50 嘅細額消費，加埋都有 '+money(small)});
+  out.sort(function(a,b){return b.w-a.w});
+  var list=out.slice(0,3).map(function(x){return x.t}).concat(good.slice(0,1)),bad=out.length&&out[0].w>=2;
+  if(!list.length)list=['今個月暫時冇特別要留意嘅地方，繼續保持！'];
+  $('tipCard').style.background=bad?'var(--redL)':'var(--greenL)';$('tipCard').style.borderColor=bad?'#F3D9D2':'#D9E2C9';
+  $('tipCard').innerHTML=(bad?pic('tux_tall',46):pic('tabby_face2',56))+'<div style="flex:1"><div class="bub">'+(bad?'潤潤提提你：':'金粒話你知：')+'</div><div class="sub" style="line-height:1.7;overflow-wrap:anywhere">'+list.map(function(x){return '・'+x}).join('<br>')+'</div></div>';}
+function renderStats(){try{tips()}catch(e){$('tipCard').classList.add('hide')}
+  var n=new Date(),months=[];
   for(var i=11;i>=0;i--){var s=new Date(n.getFullYear(),n.getMonth()-i,1),e=new Date(n.getFullYear(),n.getMonth()-i+1,1);months.push({label:(s.getMonth()+1)+'月',y:s.getFullYear(),s:s.getTime(),e:e.getTime(),exp:0})}
   exp.forEach(function(r){for(var j=0;j<12;j++){var m=months[j];if(r.t>=m.s&&r.t<m.e){m.exp+=r.amt;break}}});
   var avg=0,cnt=0;months.slice(0,11).forEach(function(m){if(m.exp>0){avg+=m.exp;cnt++}});avg=cnt?avg/cnt:0;
@@ -385,6 +427,15 @@ $('gAdd').onclick=function(){var n=clean($('gName').value),t=num($('gTarget').va
 /* ---------- 設定 ---------- */
 function markDirty(){$('dirty').classList.remove('hide')}
 function renderSet(){
+  var fh='';FX_CODES.forEach(function(c){fh+='<div class="srow"><span class="nm">'+c[1]+'<small style="color:var(--muted);font-weight:400"> '+c[0]+'</small></span><input class="inp w" type="number" inputmode="decimal" step="any" data-fx="'+c[0]+'" value="'+(SET.fx[c[0]]||'')+'"></div>'});
+  $('fxList').innerHTML=fh;
+  each($('fxList').querySelectorAll('[data-fx]'),function(el){el.oninput=function(){var v=num(el.value);if(v>0)SET.fx[el.getAttribute('data-fx')]=v;else delete SET.fx[el.getAttribute('data-fx')];markDirty()}});
+  var rk=Object.keys(SET.rules||{}).sort(),rh='';
+  rk.forEach(function(m){rh+='<div class="srow"><span class="nm" style="font-weight:400">'+esc(m)+'</span><select class="inp w" data-rule="'+esc(m)+'">'+catOptions(SET.rules[m],true)+'</select><button class="chip sm del" data-rdel="'+esc(m)+'">刪除</button></div>'});
+  $('ruleList').innerHTML=rh||'<p class="note">未有記憶。Apple Pay 記錄第一次揀類別之後就會出現。</p>';
+  each($('ruleList').querySelectorAll('[data-rule]'),function(el){el.onchange=function(){SET.rules[el.getAttribute('data-rule')]=el.value;markDirty()}});
+  each($('ruleList').querySelectorAll('[data-rdel]'),function(b){b.onclick=function(){delete SET.rules[b.getAttribute('data-rdel')];markDirty();renderSet()}});
+
   var h='';SET.cats.forEach(function(c){var v=SET.budget[c]>0?SET.budget[c]:'';
     h+='<div class="srow"><span class="nm"><i class="dot" style="background:'+catColor(c)+';margin-right:6px"></i>'+esc(c)+'</span><input class="inp w" type="number" inputmode="decimal" placeholder="每月預算" data-b="'+esc(c)+'" value="'+v+'"></div>'});
   $('bud').innerHTML=h;
@@ -412,6 +463,11 @@ $('rAdd').onclick=function(){var n=clean($('rName').value),a=num($('rAmt').value
   SET.recurring.push({name:n,amount:a,day:d,cat:$('rCat').value,pay:clean($('rPay').value),on:'是'});
   $('rName').value='';$('rAmt').value='';$('rDay').value='';$('rPay').value='';markDirty();renderSet()};
 $('setSave').onclick=function(){saveSet('set','儲存設定')};
+$('fxUpd').onclick=function(){$('fxInfo').textContent='更新緊…';
+  fetch('https://open.er-api.com/v6/latest/HKD').then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.rates)throw 0;FX_CODES.forEach(function(c){var r=d.rates[c[0]];if(r>0)SET.fx[c[0]]=Math.round(1/r*1e6)/1e6});
+    renderSet();markDirty();$('fxInfo').textContent='已更新（'+String(d.time_last_update_utc||'').slice(5,16)+'），記得撳「儲存設定」';
+  }).catch(function(){$('fxInfo').textContent='更新唔到，可能冇網絡。你可以自己填匯率。'})};
 $('exportBtn').onclick=function(){send({op:'export'},'匯出備份')};
 
 </script><script>STAGE='開始';
